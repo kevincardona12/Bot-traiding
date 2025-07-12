@@ -1,67 +1,49 @@
+import os, asyncio, logging
+from flask import Flask, request, Response
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import yfinance as yf
-import logging
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+)
 
 logging.basicConfig(level=logging.INFO)
 
-# 🔐 TOKEN de tu bot (reemplázalo con el tuyo)
-TOKEN = "8076387869:AAEZus_gajoNq2Rof4947w0m2tacpIb6Xds"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+URL = os.getenv("RENDER_EXTERNAL_URL")  # webhook URL pública
+PORT = int(os.getenv("PORT", 8000))
 
-# 💬 Comando /start
+# Define comandos
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 ¡Hola! Soy tu bot de señales de trading.\n\n"
-        "Usa /ayuda para ver los comandos disponibles."
-    )
+    await update.message.reply_text("👋 Bot activo. Usa /señal.")
 
-# 💬 Comando /ayuda
-async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📋 Comandos disponibles:\n"
-        "/oro – Precio del oro\n"
-        "/señal – Señal técnica (compra/venta)\n"
-        "/btc – Precio de Bitcoin\n"
-        "/eurusd – Precio EUR/USD\n"
-        "/ayuda – Ver esta lista"
-    )
-
-# 📈 Comando /oro
-async def oro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = yf.download("XAUUSD=X", period="1d", interval="15m")
-    last = data["Close"].iloc[-1]
-    await update.message.reply_text(f"🟡 Oro (XAU/USD): {round(last, 2)} USD")
-
-# 📉 Comando /btc
-async def btc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = yf.download("BTC-USD", period="1d", interval="15m")
-    last = data["Close"].iloc[-1]
-    await update.message.reply_text(f"₿ Bitcoin (BTC/USD): {round(last, 2)} USD")
-
-# 💱 Comando /eurusd
-async def eurusd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = yf.download("EURUSD=X", period="1d", interval="15m")
-    last = data["Close"].iloc[-1]
-    await update.message.reply_text(f"💶 EUR/USD: {round(last, 4)}")
-
-# 🔍 Comando /señal
 async def señal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    df = yf.download("XAUUSD=X", period="5d", interval="15m")
-    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
-    df["EMA50"] = df["Close"].ewm(span=50, adjust=False).mean()
+    # Aquí va tu lógica de señal (RSI, EMA, MACD)
+    await update.message.reply_text("🟢 Ejemplo señal")
 
-    delta = df["Close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df["RSI"] = 100 - (100 / (1 + rs))
+app_bot = ApplicationBuilder().token(TOKEN).build()
+app_bot.add_handler(CommandHandler("start", start))
+app_bot.add_handler(CommandHandler("señal", señal))
 
-    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
-    df["MACD"] = exp1 - exp2
-    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+# Flask para webhooks y health
+app = Flask(__name__)
 
-    last = df.iloc[-1]
-    signal = "⚪ NEUTRAL"
+@app.route("/", methods=["GET"])
+def health():
+    return "✅ OK"
 
-    if last["EMA20"] > last["EMA50"] and last["RSI"] < 70 and last["MACD"] > last["Signal
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(), app_bot.bot)
+    asyncio.create_task(app_bot.update_queue.put(update))
+    return Response("OK", status=200)
+
+async def run_bot():
+    # inicia webhook
+    await app_bot.bot.set_webhook(f"{URL}/webhook")
+    await app_bot.initialize()
+    await app_bot.start()
+    # no se usa polling
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())
+    app.run(host="0.0.0.0", port=PORT)
